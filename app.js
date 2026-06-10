@@ -16,6 +16,11 @@ const seedState = {
   activeView: "dashboard",
   activeThreadId: "t1",
   patientSearch: "",
+  globalSearch: "",
+  agendaDate: isoDate(0),
+  agendaDoctor: "all",
+  storeCommissionPercent: 5,
+  doctorConsultationPercent: 70,
   cart: [],
   orders: [
     { id: "o1", patientId: "p2", total: 1240, date: isoDate(-1), status: "Entregado" },
@@ -96,7 +101,8 @@ const seedState = {
       date: isoDate(0),
       time: "10:30",
       type: "Seguimiento",
-      status: "Confirmada",
+      status: "Realizada",
+      paymentStatus: "Pendiente",
       notes: "Revisar evolucion del tratamiento.",
     },
     {
@@ -107,6 +113,7 @@ const seedState = {
       time: "12:00",
       type: "Consulta general",
       status: "Pendiente",
+      paymentStatus: "Pendiente",
       notes: "Control de glucosa y presion.",
     },
     {
@@ -117,6 +124,7 @@ const seedState = {
       time: "09:00",
       type: "Seguimiento",
       status: "Reprogramar",
+      paymentStatus: "Pendiente",
       notes: "Paciente pidio opcion mas tarde.",
     },
     {
@@ -127,6 +135,7 @@ const seedState = {
       time: "17:30",
       type: "Teleconsulta",
       status: "Confirmada",
+      paymentStatus: "Pendiente",
       notes: "Enviar enlace 30 min antes.",
     },
   ],
@@ -270,6 +279,7 @@ const titles = {
   agenda: ["Calendario medico", "Agenda de citas"],
   patients: ["Expedientes ligeros", "Pacientes"],
   store: ["Venta asistida", "Tienda medica"],
+  billing: ["Ingresos y comisiones", "Cobros"],
   automation: ["Flujos conversacionales", "Bot y experimentos"],
   settings: ["Equipo medico", "Medicos"],
 };
@@ -298,6 +308,15 @@ function migrateState(nextState) {
   nextState.doctors = nextState.doctors?.length ? nextState.doctors : structuredClone(seedState.doctors);
   nextState.safetyRules = nextState.safetyRules?.length ? nextState.safetyRules : structuredClone(seedState.safetyRules);
   nextState.patientSearch = nextState.patientSearch || "";
+  nextState.globalSearch = nextState.globalSearch || "";
+  nextState.agendaDate = nextState.agendaDate || isoDate(0);
+  nextState.agendaDoctor = nextState.agendaDoctor || "all";
+  nextState.storeCommissionPercent = Number(nextState.storeCommissionPercent ?? 5);
+  nextState.doctorConsultationPercent = Number(nextState.doctorConsultationPercent ?? 70);
+  nextState.appointments = nextState.appointments.map((appointment) => ({
+    paymentStatus: appointment.status === "Realizada" ? "Pendiente" : "Sin cobrar",
+    ...appointment,
+  }));
   nextState.patients = nextState.patients.map((patient) => {
     if (patient.firstName || patient.paternalLastName || patient.maternalLastName) return patient;
     const parts = String(patient.name || "").trim().split(/\s+/).filter(Boolean);
@@ -342,6 +361,27 @@ function patientSearchText(patient) {
 
 function nextAppointmentForPatient(patientId) {
   return appointmentByPatient(patientId).find((appointment) => `${appointment.date} ${appointment.time}` >= `${isoDate(0)} 00:00`);
+}
+
+function countAppointmentsByStatus(appointments, status) {
+  return appointments.filter((appointment) => appointment.status === status).length;
+}
+
+function appointmentPrice(type) {
+  const prices = {
+    "Consulta general": 700,
+    Seguimiento: 500,
+    Laboratorio: 350,
+    Teleconsulta: 600,
+  };
+  return prices[type] || 500;
+}
+
+function doctorForOrder(order) {
+  const appointments = appointmentByPatient(order.patientId)
+    .filter((appointment) => appointment.date <= order.date)
+    .sort((a, b) => `${b.date} ${b.time}`.localeCompare(`${a.date} ${a.time}`));
+  return appointments[0]?.doctor || "Clinica";
 }
 
 function activeDoctors() {
@@ -393,7 +433,7 @@ function appointmentByPatient(patientId) {
 }
 
 function matchesSearch(text) {
-  const query = normalize(qs("#globalSearch").value);
+  const query = normalize(state.globalSearch);
   return !query || normalize(text).includes(query);
 }
 
@@ -404,6 +444,7 @@ function render() {
   renderAgenda();
   renderPatients();
   renderStore();
+  renderBilling();
   renderAutomation();
   renderSettings();
   saveState();
@@ -419,6 +460,7 @@ function renderChrome() {
   const [eyebrow, title] = titles[state.activeView];
   qs("#viewEyebrow").textContent = eyebrow;
   qs("#viewTitle").textContent = title;
+  qs("#globalSearch").value = state.globalSearch || "";
 
   const patientSelect = qs('#appointmentForm select[name="patientId"]');
   patientSelect.innerHTML = state.patients
@@ -508,7 +550,7 @@ function appointmentItem(appointment) {
   const patient = patientById(appointment.patientId);
   return `<article class="list-item">
     <div class="list-top">
-      <strong>${patient?.name || "Paciente"}</strong>
+      <strong>${patient ? patientFullName(patient) : "Paciente"}</strong>
       ${statusTag(appointment.status)}
     </div>
     <div class="meta-row">
@@ -518,7 +560,12 @@ function appointmentItem(appointment) {
     </div>
     <p class="muted">${appointment.notes || "Sin notas"}</p>
     <div class="meta-row">
+      <span>${appointment.status === "Realizada" ? `Cobro: ${appointment.paymentStatus || "Pendiente"}` : ""}</span>
+    </div>
+    <div class="meta-row">
       <button class="compact" data-action="confirm-appointment" data-id="${appointment.id}">Confirmar</button>
+      <button class="compact" data-action="complete-appointment" data-id="${appointment.id}">Realizada</button>
+      <button class="compact" data-action="charge-appointment" data-id="${appointment.id}">Cobrar</button>
       <button class="compact" data-action="reschedule-appointment" data-id="${appointment.id}">Reprogramar</button>
       <button class="compact" data-action="message-patient" data-patient="${appointment.patientId}">WhatsApp</button>
     </div>
@@ -526,7 +573,7 @@ function appointmentItem(appointment) {
 }
 
 function statusTag(status) {
-  const type = status === "Confirmada" ? "" : status === "Pendiente" ? "amber" : "red";
+  const type = status === "Confirmada" || status === "Pagada" ? "" : status === "Pendiente" || status === "Realizada" ? "amber" : "red";
   return `<span class="tag ${type}">${status}</span>`;
 }
 
@@ -662,33 +709,114 @@ function initials(name) {
 }
 
 function renderAgenda() {
-  const query = normalize(qs("#globalSearch").value);
-  const appointments = state.appointments
+  const query = normalize(state.globalSearch);
+  const selectedDate = state.agendaDate || isoDate(0);
+  const selectedDoctor = state.agendaDoctor || "all";
+  const doctors = activeDoctors();
+  const dayAppointments = state.appointments
     .filter((appointment) => {
       const patient = patientById(appointment.patientId);
-      return !query || normalize(`${patient?.name} ${appointment.doctor} ${appointment.status} ${appointment.type}`).includes(query);
+      const searchText = normalize(`${patientFullName(patient)} ${patient?.phone} ${appointment.doctor} ${appointment.status} ${appointment.type}`);
+      return appointment.date === selectedDate && (!query || searchText.includes(query));
     })
-    .sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
+    .sort((a, b) => a.time.localeCompare(b.time));
+  const doctorAppointments = selectedDoctor === "all"
+    ? dayAppointments
+    : dayAppointments.filter((appointment) => appointment.doctor === selectedDoctor);
+  const confirmed = countAppointmentsByStatus(dayAppointments, "Confirmada");
+  const pending = countAppointmentsByStatus(dayAppointments, "Pendiente");
+  const reschedule = countAppointmentsByStatus(dayAppointments, "Reprogramar");
+  const notConfirmed = pending + reschedule;
+  const doctorNames = [...new Set([...doctors.map((doctor) => doctor.name), ...dayAppointments.map((item) => item.doctor)])];
 
   qs("#agendaView").innerHTML = `
     <section class="panel">
-      <div class="agenda-toolbar">
+      <div class="agenda-toolbar agenda-toolbar-full">
         <div>
-          <h2>Calendario operativo</h2>
-          <p class="muted">Gestiona confirmaciones, reprogramaciones y mensajes.</p>
+          <h2>Agenda operativa</h2>
+          <p class="muted">Selecciona fecha y medico, o revisa el total del dia.</p>
         </div>
         <button class="primary" data-action="open-appointment">Nueva cita</button>
       </div>
-      <div class="list">
-        ${appointments.map(appointmentItem).join("") || empty("No hay citas con ese filtro.")}
+
+      <form class="agenda-filter-row" id="agendaFilterForm">
+        <label>
+          Dia
+          <input name="agendaDate" type="date" value="${selectedDate}" />
+        </label>
+        <label>
+          Medico
+          <select name="agendaDoctor">
+            <option value="all" ${selectedDoctor === "all" ? "selected" : ""}>Todos los medicos</option>
+            ${doctorNames
+              .map((doctor) => `<option value="${escapeHtml(doctor)}" ${selectedDoctor === doctor ? "selected" : ""}>${escapeHtml(doctor)}</option>`)
+              .join("")}
+          </select>
+        </label>
+        <button class="primary" type="submit">Aplicar</button>
+        <button class="ghost" type="button" data-action="agenda-today">Hoy</button>
+      </form>
+
+      <div class="agenda-summary-grid">
+        ${statCard("Total del dia", dayAppointments.length, "Pacientes en agenda")}
+        ${statCard("Confirmados", confirmed, "Pacientes confirmados")}
+        ${statCard("Pendientes", pending, "Falta confirmar")}
+        ${statCard("No confirmados", notConfirmed, "Pendientes o por reprogramar")}
       </div>
     </section>
+
+    <div class="grid two-col" style="margin-top:16px">
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Agenda total del dia</h2>
+            <p>${selectedDate} · ${dayAppointments.length} cita${dayAppointments.length === 1 ? "" : "s"}</p>
+          </div>
+        </div>
+        <div class="list">
+          ${dayAppointments.map(appointmentItem).join("") || empty("No hay citas para ese dia.")}
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Agenda por medico</h2>
+            <p>${selectedDoctor === "all" ? "Vista agrupada por medico" : escapeHtml(selectedDoctor)}</p>
+          </div>
+          <span class="tag blue">${doctorAppointments.length} cita${doctorAppointments.length === 1 ? "" : "s"}</span>
+        </div>
+        <div class="doctor-agenda-list">
+          ${renderDoctorAgendaGroups(doctorNames, doctorAppointments, selectedDoctor)}
+        </div>
+      </section>
+    </div>
   `;
+}
+
+function renderDoctorAgendaGroups(doctorNames, appointments, selectedDoctor) {
+  const names = selectedDoctor === "all" ? doctorNames : [selectedDoctor];
+  return names
+    .map((doctor) => {
+      const items = appointments.filter((appointment) => appointment.doctor === doctor);
+      if (!items.length && selectedDoctor !== "all") return empty("Ese medico no tiene citas en la fecha seleccionada.");
+      if (!items.length) return "";
+      return `<article class="doctor-agenda-card">
+        <div class="list-top">
+          <strong>${escapeHtml(doctor)}</strong>
+          <span class="tag">${items.length} cita${items.length === 1 ? "" : "s"}</span>
+        </div>
+        <div class="list">
+          ${items.map(appointmentItem).join("")}
+        </div>
+      </article>`;
+    })
+    .join("") || empty("No hay citas por medico para ese dia.");
 }
 
 function renderPatients() {
   const patientQuery = normalize(state.patientSearch);
-  const globalQuery = normalize(qs("#globalSearch").value);
+  const globalQuery = normalize(state.globalSearch);
   const patients = state.patients.filter((patient) => {
     const text = normalize(patientSearchText(patient));
     return (!patientQuery || text.includes(patientQuery)) && (!globalQuery || text.includes(globalQuery));
@@ -844,6 +972,153 @@ function renderStore() {
         </div>
       </aside>
     </div>
+  `;
+}
+
+function renderBilling() {
+  const query = normalize(state.globalSearch);
+  const storePercent = Number(state.storeCommissionPercent || 0);
+  const consultationPercent = Number(state.doctorConsultationPercent || 70);
+  const completedUnpaid = state.appointments
+    .filter((appointment) => appointment.status === "Realizada" && appointment.paymentStatus !== "Pagada")
+    .filter((appointment) => {
+      const patient = patientById(appointment.patientId);
+      return !query || normalize(`${patientFullName(patient)} ${appointment.doctor} ${appointment.type}`).includes(query);
+    })
+    .sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
+  const paidAppointments = state.appointments.filter((appointment) => appointment.paymentStatus === "Pagada");
+  const doctorNames = [...new Set([...activeDoctors().map((doctor) => doctor.name), ...state.appointments.map((item) => item.doctor)])];
+  const doctorRows = doctorNames
+    .map((doctor) => {
+      const consultations = paidAppointments.filter((appointment) => appointment.doctor === doctor);
+      const consultationTotal = consultations.reduce((sum, appointment) => sum + (appointment.amount || appointmentPrice(appointment.type)), 0);
+      const doctorShare = consultationTotal * (consultationPercent / 100);
+      const storeOrders = state.orders.filter((order) => doctorForOrder(order) === doctor);
+      const storeTotal = storeOrders.reduce((sum, order) => sum + order.total, 0);
+      const storeShare = storeTotal * (storePercent / 100);
+      return { doctor, consultations, consultationTotal, doctorShare, storeOrders, storeTotal, storeShare, totalShare: doctorShare + storeShare };
+    })
+    .filter((row) => !query || normalize(`${row.doctor} ${row.consultations.length} ${row.storeOrders.length}`).includes(query));
+  const totalConsultations = doctorRows.reduce((sum, row) => sum + row.consultationTotal, 0);
+  const totalDoctorShare = doctorRows.reduce((sum, row) => sum + row.doctorShare, 0);
+  const totalStore = state.orders.reduce((sum, order) => sum + order.total, 0);
+  const totalStoreShare = doctorRows.reduce((sum, row) => sum + row.storeShare, 0);
+  const pendingTotal = completedUnpaid.reduce((sum, appointment) => sum + appointmentPrice(appointment.type), 0);
+
+  qs("#billingView").innerHTML = `
+    <section class="panel billing-hero">
+      <div class="panel-header">
+        <div>
+          <h2>Cobros</h2>
+          <p>Primero marca una cita como realizada, despues realiza el cobro.</p>
+        </div>
+      </div>
+      <form class="billing-config" id="billingConfigForm">
+        <label>
+          % tienda para medico
+          <input name="storeCommissionPercent" type="number" min="0" max="100" step="0.5" value="${storePercent}" />
+        </label>
+        <label>
+          % consulta para medico
+          <input name="doctorConsultationPercent" type="number" min="0" max="100" step="1" value="${consultationPercent}" />
+        </label>
+        <button class="primary" type="submit">Guardar</button>
+      </form>
+      <div class="agenda-summary-grid">
+        ${statCard("Por cobrar", money(pendingTotal), "Citas realizadas sin cobrar")}
+        ${statCard("Consultas cobradas", money(totalConsultations), "Citas pagadas")}
+        ${statCard("Para medicos", money(totalDoctorShare), `${consultationPercent}% por consulta`)}
+        ${statCard("Comision tienda", money(totalStoreShare), `${storePercent}% configurable`)}
+      </div>
+    </section>
+
+    <div class="grid two-col" style="margin-top:16px">
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Citas realizadas por cobrar</h2>
+            <p>${completedUnpaid.length} pendiente${completedUnpaid.length === 1 ? "" : "s"} de cobro.</p>
+          </div>
+        </div>
+        <div class="list">
+          ${completedUnpaid
+            .map((appointment) => {
+              const patient = patientById(appointment.patientId);
+              const amount = appointmentPrice(appointment.type);
+              return `<article class="list-item billing-charge-item">
+                <div class="list-top"><strong>${patientFullName(patient)}</strong><span class="tag amber">${money(amount)}</span></div>
+                <div class="meta-row"><span>${timeLabel(appointment.date, appointment.time)}</span><span>${appointment.doctor}</span><span>${appointment.type}</span></div>
+                <div class="meta-row">
+                  <button class="primary" data-action="charge-appointment" data-id="${appointment.id}">Cobrar</button>
+                  <button class="compact" data-action="message-patient" data-patient="${appointment.patientId}">WhatsApp</button>
+                </div>
+              </article>`;
+            })
+            .join("") || empty("No hay citas realizadas por cobrar.")}
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Por medico</h2>
+            <p>Estimado de lo que percibe cada medico.</p>
+          </div>
+        </div>
+        <div class="billing-table-wrap">
+          <table class="patient-table billing-table">
+            <thead>
+              <tr>
+                <th>Medico</th>
+                <th>Cobradas</th>
+                <th>Consulta total</th>
+                <th>Medico</th>
+                <th>Tienda</th>
+                <th>Total medico</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${doctorRows
+                .map(
+                  (row) => `<tr>
+                    <td><strong>${escapeHtml(row.doctor)}</strong></td>
+                    <td>${row.consultations.length}</td>
+                    <td>${money(row.consultationTotal)}</td>
+                    <td>${money(row.doctorShare)}</td>
+                    <td>${money(row.storeShare)}</td>
+                    <td><strong>${money(row.totalShare)}</strong></td>
+                  </tr>`,
+                )
+                .join("") || `<tr><td colspan="6">${empty("No hay cobros con ese filtro.")}</td></tr>`}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <section class="panel" style="margin-top:16px">
+      <div class="panel-header">
+        <div>
+          <h2>Ventas recientes</h2>
+          <p>Pedidos de tienda y medico asociado por historial.</p>
+        </div>
+      </div>
+      <div class="list">
+        ${state.orders
+          .filter((order) => {
+            const patient = patientById(order.patientId);
+            return !query || normalize(`${patientFullName(patient)} ${doctorForOrder(order)} ${order.status}`).includes(query);
+          })
+          .map((order) => {
+            const patient = patientById(order.patientId);
+            return `<article class="list-item">
+              <div class="list-top"><strong>${patientFullName(patient)}</strong><span class="tag">${money(order.total)}</span></div>
+              <div class="meta-row"><span>${order.date}</span><span>${order.status}</span><span>${doctorForOrder(order)}</span><span>${storePercent}% tienda</span></div>
+            </article>`;
+          })
+          .join("") || empty("No hay ventas registradas.")}
+      </div>
+    </section>
   `;
 }
 
@@ -1024,6 +1299,11 @@ document.addEventListener("click", (event) => {
   const patientId = actionButton.dataset.patient;
 
   if (action === "open-appointment") openAppointment(patientId);
+  if (action === "agenda-today") {
+    state.agendaDate = isoDate(0);
+    state.agendaDoctor = "all";
+    render();
+  }
   if (action === "reschedule-patient") {
     const next = nextAppointmentForPatient(patientId);
     if (next) next.status = "Reprogramar";
@@ -1087,6 +1367,24 @@ document.addEventListener("click", (event) => {
     if (appointment) appointment.status = "Confirmada";
     render();
   }
+  if (action === "complete-appointment") {
+    const appointment = state.appointments.find((item) => item.id === id);
+    if (appointment) {
+      appointment.status = "Realizada";
+      appointment.paymentStatus = "Pendiente";
+    }
+    render();
+  }
+  if (action === "charge-appointment") {
+    const appointment = state.appointments.find((item) => item.id === id);
+    if (appointment) {
+      appointment.status = "Realizada";
+      appointment.paymentStatus = "Pagada";
+      appointment.paidAt = isoDate(0);
+      appointment.amount = appointment.amount || appointmentPrice(appointment.type);
+    }
+    render();
+  }
   if (action === "reschedule-appointment") {
     const appointment = state.appointments.find((item) => item.id === id);
     if (appointment) appointment.status = "Reprogramar";
@@ -1147,6 +1445,22 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("submit", (event) => {
+  if (event.target.id === "billingConfigForm") {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target));
+    state.storeCommissionPercent = Math.max(0, Math.min(100, Number(data.storeCommissionPercent || 0)));
+    state.doctorConsultationPercent = Math.max(0, Math.min(100, Number(data.doctorConsultationPercent || 0)));
+    render();
+  }
+
+  if (event.target.id === "agendaFilterForm") {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target));
+    state.agendaDate = data.agendaDate || isoDate(0);
+    state.agendaDoctor = data.agendaDoctor || "all";
+    render();
+  }
+
   if (event.target.id === "patientSearchForm") {
     event.preventDefault();
     state.patientSearch = new FormData(event.target).get("patientSearch").trim();
@@ -1228,6 +1542,7 @@ qs("#appointmentForm").addEventListener("submit", (event) => {
     time: data.time,
     type: data.type,
     status: data.status,
+    paymentStatus: "Pendiente",
     notes: data.notes.trim(),
   });
   qs("#appointmentDialog").close();
@@ -1235,8 +1550,15 @@ qs("#appointmentForm").addEventListener("submit", (event) => {
   render();
 });
 
-qs("#quickAppointmentBtn").addEventListener("click", () => openAppointment());
-qs("#globalSearch").addEventListener("input", render);
+qs("#globalSearchForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  state.globalSearch = new FormData(event.target).get("globalSearch").trim();
+  render();
+});
+qs("#clearGlobalSearchBtn").addEventListener("click", () => {
+  state.globalSearch = "";
+  render();
+});
 
 function completeOrder() {
   if (!state.cart.length) return;

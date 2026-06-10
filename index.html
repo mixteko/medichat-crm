@@ -23,6 +23,7 @@
           <button class="nav-item" data-view="agenda">Agenda</button>
           <button class="nav-item" data-view="patients">Pacientes</button>
           <button class="nav-item" data-view="store">Tienda</button>
+          <button class="nav-item" data-view="billing">Cobros</button>
           <button class="nav-item" data-view="automation">Bot</button>
           <button class="nav-item" data-view="settings">Medicos</button>
         </nav>
@@ -31,7 +32,7 @@
           <span class="pulse"></span>
           <div>
             <strong>Modo demo local</strong>
-            <span>Listo para conectar API</span>
+            <span class="version-pill">v0.4 Cobros · UI nueva</span>
           </div>
         </div>
       </aside>
@@ -42,13 +43,14 @@
             <p class="eyebrow" id="viewEyebrow">Operacion diaria</p>
             <h1 id="viewTitle">Panel clinico</h1>
           </div>
-          <div class="top-actions">
+          <form class="top-actions" id="globalSearchForm">
             <label class="search">
               <span>Buscar</span>
-              <input id="globalSearch" type="search" placeholder="Paciente, telefono, producto..." />
+              <input id="globalSearch" name="globalSearch" type="search" placeholder="Paciente, telefono, producto..." />
             </label>
-            <button class="primary" id="quickAppointmentBtn">Nueva cita</button>
-          </div>
+            <button class="primary" type="submit">Buscar</button>
+            <button class="ghost" type="button" id="clearGlobalSearchBtn">Limpiar</button>
+          </form>
         </header>
 
         <section class="view is-visible" id="dashboardView"></section>
@@ -56,6 +58,7 @@
         <section class="view" id="agendaView"></section>
         <section class="view" id="patientsView"></section>
         <section class="view" id="storeView"></section>
+        <section class="view" id="billingView"></section>
         <section class="view" id="automationView"></section>
         <section class="view" id="settingsView"></section>
       </main>
