@@ -550,6 +550,32 @@ textarea:focus {
   max-width: 260px;
 }
 
+
+.patient-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: end;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.patient-search {
+  width: 100%;
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-width: 210px;
+}
+
+.row-actions .danger,
+.row-actions .compact {
+  min-height: 32px;
+  padding: 0 10px;
+}
+
 .patient-table {
   width: 100%;
   border-collapse: collapse;
@@ -748,6 +774,10 @@ textarea:focus {
     flex-direction: column;
   }
 
+  .patient-search-row {
+    grid-template-columns: 1fr;
+  }
+
   .top-actions .search,
   .agenda-toolbar > *,
   .store-toolbar > * {
@@ -769,6 +799,14 @@ textarea:focus {
 
   .bubble {
     max-width: 92%;
+  }
+
+  .patient-search-row {
+    grid-template-columns: 1fr;
+  }
+
+  .row-actions {
+    min-width: 0;
   }
 
   .patient-table {

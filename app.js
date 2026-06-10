@@ -15,6 +15,7 @@ const timeLabel = (date, time) => `${date} ${time}`;
 const seedState = {
   activeView: "dashboard",
   activeThreadId: "t1",
+  patientSearch: "",
   cart: [],
   orders: [
     { id: "o1", patientId: "p2", total: 1240, date: isoDate(-1), status: "Entregado" },
@@ -296,6 +297,17 @@ function loadState() {
 function migrateState(nextState) {
   nextState.doctors = nextState.doctors?.length ? nextState.doctors : structuredClone(seedState.doctors);
   nextState.safetyRules = nextState.safetyRules?.length ? nextState.safetyRules : structuredClone(seedState.safetyRules);
+  nextState.patientSearch = nextState.patientSearch || "";
+  nextState.patients = nextState.patients.map((patient) => {
+    if (patient.firstName || patient.paternalLastName || patient.maternalLastName) return patient;
+    const parts = String(patient.name || "").trim().split(/\s+/).filter(Boolean);
+    return {
+      ...patient,
+      firstName: parts[0] || patient.name || "",
+      paternalLastName: parts[1] || "",
+      maternalLastName: parts.slice(2).join(" "),
+    };
+  });
   nextState.threads = nextState.threads.map((thread) => ({
     risk: "Bajo",
     mode: "IA sugiere",
@@ -316,6 +328,20 @@ function saveState() {
 
 function patientById(id) {
   return state.patients.find((patient) => patient.id === id);
+}
+
+function patientFullName(patient) {
+  return [patient?.firstName, patient?.paternalLastName, patient?.maternalLastName]
+    .filter(Boolean)
+    .join(" ") || patient?.name || "Paciente";
+}
+
+function patientSearchText(patient) {
+  return `${patientFullName(patient)} ${patient.name || ""} ${patient.phone} ${patient.condition} ${patient.tags.join(" ")}`;
+}
+
+function nextAppointmentForPatient(patientId) {
+  return appointmentByPatient(patientId).find((appointment) => `${appointment.date} ${appointment.time}` >= `${isoDate(0)} 00:00`);
 }
 
 function activeDoctors() {
@@ -344,7 +370,7 @@ function buildSuggestedReply(thread = activeThread()) {
   }
 
   if (thread.intent === "Agendar") {
-    return `Buen dia${patient ? `, ${patient.name.split(" ")[0]}` : ""}. Tengo horarios disponibles ${isoDate(1)} a las 09:00, ${isoDate(2)} a las 12:30 y ${isoDate(3)} a las 17:30. Cual prefiere?`;
+    return `Buen dia${patient ? `, ${patientFullName(patient).split(" ")[0]}` : ""}. Tengo horarios disponibles ${isoDate(1)} a las 09:00, ${isoDate(2)} a las 12:30 y ${isoDate(3)} a las 17:30. Cual prefiere?`;
   }
 
   const next = patient ? appointmentByPatient(patient.id).find((item) => item.status !== "Cancelada") : null;
@@ -396,7 +422,7 @@ function renderChrome() {
 
   const patientSelect = qs('#appointmentForm select[name="patientId"]');
   patientSelect.innerHTML = state.patients
-    .map((patient) => `<option value="${patient.id}">${escapeHtml(patient.name)}</option>`)
+    .map((patient) => `<option value="${patient.id}">${escapeHtml(patientFullName(patient))}</option>`)
     .join("");
 
   const doctorSelect = qs('#appointmentForm select[name="doctor"]');
@@ -455,7 +481,7 @@ function renderDashboard() {
             .map((thread) => {
               const patient = patientById(thread.patientId);
               return `<article class="list-item">
-                <div class="list-top"><strong>${patient.name}</strong><span class="tag amber">${thread.unread} nuevo</span></div>
+                <div class="list-top"><strong>${patientFullName(patient)}</strong><span class="tag amber">${thread.unread} nuevo</span></div>
                 <div class="meta-row"><span>${thread.intent}</span><span>${patient.phone}</span></div>
               </article>`;
             })
@@ -533,9 +559,9 @@ function renderInbox() {
                 const itemPatient = patientById(thread.patientId);
                 const last = thread.messages[thread.messages.length - 1];
                 return `<button class="contact-row ${thread.id === activeThread?.id ? "is-active" : ""}" data-action="select-thread" data-id="${thread.id}">
-                  <span class="avatar">${initials(itemPatient.name)}</span>
+                  <span class="avatar">${initials(patientFullName(itemPatient))}</span>
                   <span>
-                    <strong>${itemPatient.name}</strong>
+                    <strong>${patientFullName(itemPatient)}</strong>
                     <span>${last.text}</span>
                   </span>
                   ${thread.unread ? `<span class="tag amber">${thread.unread}</span>` : riskTag(thread.risk || "Bajo")}
@@ -550,7 +576,7 @@ function renderInbox() {
         <div class="chat-header">
           <div class="list-top">
             <div>
-              <h2>${patient?.name || "Sin conversacion"}</h2>
+              <h2>${patient ? patientFullName(patient) : "Sin conversacion"}</h2>
               <p class="muted">${patient?.phone || ""} · ${activeThread?.intent || ""}</p>
             </div>
             ${activeThread ? `${riskTag(activeThread.risk || "Bajo")}<span class="tag blue">${activeThread.mode || "IA sugiere"}</span>` : ""}
@@ -597,7 +623,7 @@ function renderInbox() {
           patient
             ? `<div class="detail-stack">
               <article class="list-item">
-                <strong>${patient.name}</strong>
+                <strong>${patientFullName(patient)}</strong>
                 <div class="meta-row"><span>${patient.age} anos</span><span>${patient.condition}</span></div>
                 <p class="muted">${patient.notes}</p>
               </article>
@@ -661,9 +687,12 @@ function renderAgenda() {
 }
 
 function renderPatients() {
-  const patients = state.patients.filter((patient) =>
-    matchesSearch(`${patient.name} ${patient.phone} ${patient.condition} ${patient.tags.join(" ")}`),
-  );
+  const patientQuery = normalize(state.patientSearch);
+  const globalQuery = normalize(qs("#globalSearch").value);
+  const patients = state.patients.filter((patient) => {
+    const text = normalize(patientSearchText(patient));
+    return (!patientQuery || text.includes(patientQuery)) && (!globalQuery || text.includes(globalQuery));
+  });
 
   qs("#patientsView").innerHTML = `
     <div class="grid two-col">
@@ -671,32 +700,53 @@ function renderPatients() {
         <div class="panel-header">
           <div>
             <h2>Directorio de pacientes</h2>
-            <p>Base ligera lista para expediente completo.</p>
+            <p>Busca por nombre, primer apellido o segundo apellido.</p>
           </div>
+          <span class="tag blue">${patients.length} resultado${patients.length === 1 ? "" : "s"}</span>
         </div>
+
+        <form class="patient-search-row" id="patientSearchForm">
+          <label class="search patient-search">
+            <span>Buscar paciente</span>
+            <input name="patientSearch" type="search" value="${escapeHtml(state.patientSearch)}" placeholder="Nombre, primer apellido, segundo apellido..." autocomplete="off" />
+          </label>
+          <button class="primary" type="submit">Buscar</button>
+          <button class="ghost" type="button" data-action="clear-patient-search">Limpiar</button>
+        </form>
+
         <table class="patient-table">
           <thead>
             <tr>
               <th>Paciente</th>
               <th>Telefono</th>
               <th>Condicion</th>
-              <th>Etiquetas</th>
-              <th></th>
+              <th>Proxima cita</th>
+              <th>Acciones</th>
             </tr>
           </thead>
           <tbody>
             ${
               patients
-                .map(
-                  (patient) => `<tr>
-                    <td><strong>${patient.name}</strong><br><span class="muted">${patient.age} anos</span></td>
-                    <td>${patient.phone}</td>
-                    <td>${patient.condition}</td>
-                    <td>${patient.tags.map((tag) => `<span class="tag">${tag}</span>`).join(" ")}</td>
-                    <td><button class="compact" data-action="message-patient" data-patient="${patient.id}">WhatsApp</button></td>
-                  </tr>`,
-                )
-                .join("") || `<tr><td colspan="5">${empty("Sin pacientes con ese filtro.")}</td></tr>`
+                .map((patient) => {
+                  const next = nextAppointmentForPatient(patient.id);
+                  return `<tr>
+                    <td>
+                      <strong>${escapeHtml(patientFullName(patient))}</strong><br>
+                      <span class="muted">${patient.age} anos · ${escapeHtml(patient.paternalLastName || "Sin apellido")}</span>
+                    </td>
+                    <td>${escapeHtml(patient.phone)}</td>
+                    <td>${escapeHtml(patient.condition)}</td>
+                    <td>${next ? `${timeLabel(next.date, next.time)}<br><span class="muted">${escapeHtml(next.status)}</span>` : "<span class='muted'>Sin cita futura</span>"}</td>
+                    <td>
+                      <div class="row-actions">
+                        <button class="compact" data-action="message-patient" data-patient="${patient.id}">WhatsApp</button>
+                        <button class="compact" data-action="reschedule-patient" data-patient="${patient.id}">Reprogramar</button>
+                        <button class="danger" data-action="delete-patient" data-patient="${patient.id}">Eliminar</button>
+                      </div>
+                    </td>
+                  </tr>`;
+                })
+                .join("") || `<tr><td colspan="5">${empty("Busca por nombre o apellido para encontrar pacientes.")}</td></tr>`
             }
           </tbody>
         </table>
@@ -706,11 +756,13 @@ function renderPatients() {
         <div class="panel-header">
           <div>
             <h2>Alta rapida</h2>
-            <p>Registra un paciente y abre su canal.</p>
+            <p>Registra nombre y apellidos para busquedas mas precisas.</p>
           </div>
         </div>
         <form class="form-grid" id="patientForm">
-          <label>Nombre<input name="name" required placeholder="Nombre completo"></label>
+          <label>Nombre<input name="firstName" required placeholder="Nombre"></label>
+          <label>Primer apellido<input name="paternalLastName" required placeholder="Primer apellido"></label>
+          <label>Segundo apellido<input name="maternalLastName" placeholder="Segundo apellido"></label>
           <label>Telefono<input name="phone" required placeholder="+52 ..."></label>
           <label>Edad<input name="age" type="number" min="0" max="120" required></label>
           <label>Condicion<input name="condition" required placeholder="Motivo o diagnostico"></label>
@@ -721,7 +773,6 @@ function renderPatients() {
     </div>
   `;
 }
-
 function renderStore() {
   const products = state.products.filter((product) =>
     matchesSearch(`${product.name} ${product.category} ${product.sku}`),
@@ -973,6 +1024,13 @@ document.addEventListener("click", (event) => {
   const patientId = actionButton.dataset.patient;
 
   if (action === "open-appointment") openAppointment(patientId);
+  if (action === "reschedule-patient") {
+    const next = nextAppointmentForPatient(patientId);
+    if (next) next.status = "Reprogramar";
+    openAppointment(patientId);
+    const form = qs("#appointmentForm");
+    if (form?.elements.status) form.elements.status.value = "Pendiente";
+  }
   if (action === "select-thread") {
     state.activeThreadId = id;
     const thread = activeThread();
@@ -1066,6 +1124,21 @@ document.addEventListener("click", (event) => {
       render();
     }
   }
+  if (action === "clear-patient-search") {
+    state.patientSearch = "";
+    render();
+  }
+  if (action === "delete-patient") {
+    const patient = patientById(patientId);
+    if (patient && window.confirm(`Eliminar a ${patientFullName(patient)} y sus citas/conversaciones?`)) {
+      state.patients = state.patients.filter((item) => item.id !== patientId);
+      state.appointments = state.appointments.filter((item) => item.patientId !== patientId);
+      state.threads = state.threads.filter((item) => item.patientId !== patientId);
+      state.orders = state.orders.filter((item) => item.patientId !== patientId);
+      if (!state.threads.some((thread) => thread.id === state.activeThreadId)) state.activeThreadId = state.threads[0]?.id || "";
+      render();
+    }
+  }
   if (action === "complete-order") completeOrder();
   if (action === "store-demo") {
     state.activeView = "store";
@@ -1074,6 +1147,12 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("submit", (event) => {
+  if (event.target.id === "patientSearchForm") {
+    event.preventDefault();
+    state.patientSearch = new FormData(event.target).get("patientSearch").trim();
+    render();
+  }
+
   if (event.target.id === "messageForm") {
     event.preventDefault();
     const thread = activeThread();
@@ -1103,9 +1182,15 @@ document.addEventListener("submit", (event) => {
   if (event.target.id === "patientForm") {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(event.target));
+    const firstName = data.firstName.trim();
+    const paternalLastName = data.paternalLastName.trim();
+    const maternalLastName = data.maternalLastName.trim();
     const patient = {
       id: uid("p"),
-      name: data.name.trim(),
+      firstName,
+      paternalLastName,
+      maternalLastName,
+      name: [firstName, paternalLastName, maternalLastName].filter(Boolean).join(" "),
       phone: data.phone.trim(),
       age: Number(data.age),
       condition: data.condition.trim(),
@@ -1121,7 +1206,7 @@ document.addEventListener("submit", (event) => {
       intent: "Nuevo paciente",
       risk: "Bajo",
       mode: "IA sugiere",
-      suggestedReply: "Buen dia. Ya tenemos su canal registrado. Con gusto le ayudamos a agendar o resolver dudas administrativas.",
+      suggestedReply: "Buen dia. Ya tenemos su canal registrado. Con gusto le ayudamos a agendar, reprogramar o resolver dudas administrativas.",
       unread: 0,
       messages: [{ from: "bot", text: "Canal creado para seguimiento inicial.", time: "Ahora" }],
     });
