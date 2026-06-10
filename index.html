@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MediChat CRM</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">M</div>
+          <div>
+            <strong>MediChat</strong>
+            <span>CRM medico</span>
+          </div>
+        </div>
+
+        <nav class="nav" aria-label="Navegacion principal">
+          <button class="nav-item is-active" data-view="dashboard">Panel</button>
+          <button class="nav-item" data-view="inbox">WhatsApp</button>
+          <button class="nav-item" data-view="agenda">Agenda</button>
+          <button class="nav-item" data-view="patients">Pacientes</button>
+          <button class="nav-item" data-view="store">Tienda</button>
+          <button class="nav-item" data-view="automation">Bot</button>
+        </nav>
+
+        <div class="sidebar-status">
+          <span class="pulse"></span>
+          <div>
+            <strong>Modo demo local</strong>
+            <span>Listo para conectar API</span>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow" id="viewEyebrow">Operacion diaria</p>
+            <h1 id="viewTitle">Panel clinico</h1>
+          </div>
+          <div class="top-actions">
+            <label class="search">
+              <span>Buscar</span>
+              <input id="globalSearch" type="search" placeholder="Paciente, telefono, producto..." />
+            </label>
+            <button class="primary" id="quickAppointmentBtn">Nueva cita</button>
+          </div>
+        </header>
+
+        <section class="view is-visible" id="dashboardView"></section>
+        <section class="view" id="inboxView"></section>
+        <section class="view" id="agendaView"></section>
+        <section class="view" id="patientsView"></section>
+        <section class="view" id="storeView"></section>
+        <section class="view" id="automationView"></section>
+      </main>
+    </div>
+
+    <dialog id="appointmentDialog" class="modal">
+      <form method="dialog" id="appointmentForm">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Agenda medica</p>
+            <h2>Nueva cita</h2>
+          </div>
+          <button class="icon-button" value="cancel" type="submit" aria-label="Cerrar">x</button>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            Paciente
+            <select name="patientId" required></select>
+          </label>
+          <label>
+            Medico
+            <select name="doctor" required>
+              <option>Dra. Sofia Rivera</option>
+              <option>Dr. Andres Molina</option>
+              <option>Dra. Laura Chen</option>
+            </select>
+          </label>
+          <label>
+            Fecha
+            <input name="date" type="date" required />
+          </label>
+          <label>
+            Hora
+            <input name="time" type="time" required />
+          </label>
+          <label>
+            Tipo
+            <select name="type" required>
+              <option>Consulta general</option>
+              <option>Seguimiento</option>
+              <option>Laboratorio</option>
+              <option>Teleconsulta</option>
+            </select>
+          </label>
+          <label>
+            Estado
+            <select name="status" required>
+              <option>Confirmada</option>
+              <option>Pendiente</option>
+              <option>Reprogramar</option>
+            </select>
+          </label>
+          <label class="full">
+            Notas
+            <textarea name="notes" rows="3" placeholder="Motivo de consulta o indicaciones"></textarea>
+          </label>
+        </div>
+
+        <div class="modal-actions">
+          <button class="ghost" value="cancel" type="submit">Cancelar</button>
+          <button class="primary" value="default" type="submit">Guardar cita</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="app.js"></script>
+  </body>
+</html>
