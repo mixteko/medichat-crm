@@ -61,6 +61,32 @@ const seedState = {
       notes: "Necesita recordatorio 24 horas antes de cada cita.",
     },
   ],
+  doctors: [
+    {
+      id: "d1",
+      name: "Dra. Sofia Rivera",
+      specialty: "Medicina general",
+      phone: "+52 81 1000 0101",
+      room: "Consultorio 1",
+      active: true,
+    },
+    {
+      id: "d2",
+      name: "Dr. Andres Molina",
+      specialty: "Endocrinologia",
+      phone: "+52 81 1000 0102",
+      room: "Consultorio 2",
+      active: true,
+    },
+    {
+      id: "d3",
+      name: "Dra. Laura Chen",
+      specialty: "Cardiologia",
+      phone: "+52 81 1000 0103",
+      room: "Consultorio 3",
+      active: true,
+    },
+  ],
   appointments: [
     {
       id: "a1",
@@ -109,6 +135,9 @@ const seedState = {
       patientId: "p1",
       status: "Abierto",
       intent: "Verificar cita",
+      risk: "Medio",
+      mode: "IA sugiere",
+      suggestedReply: "Buen dia, claro. Su cita aparece registrada para hoy. Le confirmo fecha, hora e indicaciones antes de enviar.",
       unread: 2,
       messages: [
         { from: "patient", text: "Hola, me puedes confirmar mi cita?", time: "09:12" },
@@ -121,6 +150,9 @@ const seedState = {
       patientId: "p2",
       status: "Bot activo",
       intent: "Compra tienda",
+      risk: "Bajo",
+      mode: "IA responde sola",
+      suggestedReply: "Tenemos tiras reactivas disponibles. Puedo preparar el pedido y confirmar total antes de registrarlo.",
       unread: 0,
       messages: [
         { from: "patient", text: "Necesito tiras reactivas y vitaminas.", time: "08:40" },
@@ -136,11 +168,45 @@ const seedState = {
       patientId: "p3",
       status: "Lead",
       intent: "Agendar",
+      risk: "Bajo",
+      mode: "IA sugiere",
+      suggestedReply: "Buen dia. Tengo horarios disponibles esta semana. Le puedo ofrecer opciones y confirmar con recepcion.",
       unread: 1,
       messages: [
         { from: "patient", text: "Quiero una consulta esta semana.", time: "Ayer" },
         { from: "bot", text: "Te puedo ofrecer horarios disponibles.", time: "Ayer" },
       ],
+    },
+    {
+      id: "t4",
+      patientId: "p4",
+      status: "Derivar humano",
+      intent: "Posible urgencia",
+      risk: "Alto",
+      mode: "Humano requerido",
+      suggestedReply: "Para orientarle adecuadamente, es necesario que el medico valore su caso. Si presenta dolor intenso, dificultad para respirar o empeoramiento rapido, acuda a urgencias o llame a emergencias.",
+      unread: 3,
+      messages: [
+        { from: "patient", text: "Tengo presion muy alta y dolor fuerte de cabeza, que tomo?", time: "09:25" },
+        { from: "bot", text: "Voy a pasar su caso con recepcion para revision prioritaria.", time: "09:25" },
+      ],
+    },
+  ],
+  safetyRules: [
+    {
+      name: "Puede responder sola",
+      level: "Bajo",
+      examples: "horarios, direccion, precios, disponibilidad, confirmaciones administrativas",
+    },
+    {
+      name: "Requiere aprobacion",
+      level: "Medio",
+      examples: "indicaciones previas, estudios, dudas clinicas leves, cambios de cita delicados",
+    },
+    {
+      name: "Derivar a humano",
+      level: "Alto",
+      examples: "urgencias, sintomas graves, diagnostico, tratamiento, medicamentos controlados, quejas",
     },
   ],
   products: [
@@ -204,22 +270,44 @@ const titles = {
   patients: ["Expedientes ligeros", "Pacientes"],
   store: ["Venta asistida", "Tienda medica"],
   automation: ["Flujos conversacionales", "Bot y experimentos"],
+  settings: ["Equipo medico", "Medicos"],
 };
 
 const qs = (selector, root = document) => root.querySelector(selector);
 const qsa = (selector, root = document) => [...root.querySelectorAll(selector)];
 const uid = (prefix) => `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 const normalize = (value) => String(value || "").toLowerCase().trim();
+const escapeHtml = (value) =>
+  String(value || "").replace(/[&<>'"]/g, (char) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char],
+  );
 
 function loadState() {
   const cached = localStorage.getItem(STORAGE_KEY);
-  if (!cached) return structuredClone(seedState);
+  if (!cached) return migrateState(structuredClone(seedState));
 
   try {
-    return { ...structuredClone(seedState), ...JSON.parse(cached) };
+    return migrateState({ ...structuredClone(seedState), ...JSON.parse(cached) });
   } catch {
-    return structuredClone(seedState);
+    return migrateState(structuredClone(seedState));
   }
+}
+
+function migrateState(nextState) {
+  nextState.doctors = nextState.doctors?.length ? nextState.doctors : structuredClone(seedState.doctors);
+  nextState.safetyRules = nextState.safetyRules?.length ? nextState.safetyRules : structuredClone(seedState.safetyRules);
+  nextState.threads = nextState.threads.map((thread) => ({
+    risk: "Bajo",
+    mode: "IA sugiere",
+    suggestedReply: thread.suggestedReply || "Buen dia. Con gusto le apoyo desde recepcion.",
+    ...thread,
+  }));
+
+  if (!nextState.threads.some((thread) => thread.intent === "Posible urgencia")) {
+    nextState.threads.push(structuredClone(seedState.threads.find((thread) => thread.id === "t4")));
+  }
+
+  return nextState;
 }
 
 function saveState() {
@@ -228,6 +316,48 @@ function saveState() {
 
 function patientById(id) {
   return state.patients.find((patient) => patient.id === id);
+}
+
+function activeDoctors() {
+  return state.doctors.filter((doctor) => doctor.active);
+}
+
+function riskTag(risk) {
+  const type = risk === "Alto" ? "red" : risk === "Medio" ? "amber" : "";
+  return `<span class="tag ${type}">${risk}</span>`;
+}
+
+function buildSuggestedReply(thread = activeThread()) {
+  if (!thread) return "";
+  const patient = patientById(thread.patientId);
+  const lastText = normalize(thread.messages?.[thread.messages.length - 1]?.text || "");
+  const isUrgent = ["dolor fuerte", "presion muy alta", "dificultad", "urgencia", "que tomo", "medicamento"].some((word) =>
+    lastText.includes(word),
+  );
+
+  if (isUrgent || thread.risk === "Alto") {
+    return "Para orientarle adecuadamente, es necesario que el medico valore su caso. Si presenta dolor intenso, dificultad para respirar o empeoramiento rapido, acuda a urgencias o llame a emergencias.";
+  }
+
+  if (thread.intent === "Compra tienda") {
+    return "Claro. Tenemos productos disponibles en tienda medica. Le puedo confirmar precio, stock y registrar su pedido si esta de acuerdo.";
+  }
+
+  if (thread.intent === "Agendar") {
+    return `Buen dia${patient ? `, ${patient.name.split(" ")[0]}` : ""}. Tengo horarios disponibles ${isoDate(1)} a las 09:00, ${isoDate(2)} a las 12:30 y ${isoDate(3)} a las 17:30. Cual prefiere?`;
+  }
+
+  const next = patient ? appointmentByPatient(patient.id).find((item) => item.status !== "Cancelada") : null;
+  return next
+    ? `Buen dia. Su proxima cita es ${timeLabel(next.date, next.time)} con ${next.doctor}. Estado: ${next.status}. ${next.notes || ""}`
+    : "Buen dia. No encuentro una cita activa con estos datos. Le paso con recepcion para ayudarle a revisar o agendar.";
+}
+
+function setThreadSafety(thread, risk, mode, status = thread.status) {
+  thread.risk = risk;
+  thread.mode = mode;
+  thread.status = status;
+  thread.suggestedReply = buildSuggestedReply(thread);
 }
 
 function appointmentByPatient(patientId) {
@@ -249,6 +379,7 @@ function render() {
   renderPatients();
   renderStore();
   renderAutomation();
+  renderSettings();
   saveState();
 }
 
@@ -265,14 +396,24 @@ function renderChrome() {
 
   const patientSelect = qs('#appointmentForm select[name="patientId"]');
   patientSelect.innerHTML = state.patients
-    .map((patient) => `<option value="${patient.id}">${patient.name}</option>`)
+    .map((patient) => `<option value="${patient.id}">${escapeHtml(patient.name)}</option>`)
     .join("");
+
+  const doctorSelect = qs('#appointmentForm select[name="doctor"]');
+  const availableDoctors = activeDoctors();
+  doctorSelect.innerHTML = availableDoctors.length
+    ? availableDoctors
+        .map((doctor) => `<option value="${escapeHtml(doctor.name)}">${escapeHtml(doctor.name)} · ${escapeHtml(doctor.specialty)}</option>`)
+        .join("")
+    : '<option value="" disabled selected>Agrega un medico activo</option>';
+  doctorSelect.disabled = availableDoctors.length === 0;
 }
 
 function renderDashboard() {
   const todayAppointments = state.appointments.filter((item) => item.date === isoDate(0));
   const openThreads = state.threads.filter((thread) => thread.status !== "Cerrado");
   const lowStock = state.products.filter((product) => product.stock <= 5);
+  const humanReview = state.threads.filter((thread) => thread.risk === "Alto" || thread.mode === "Humano requerido");
   const sales = state.orders.reduce((sum, order) => sum + order.total, 0);
   const nextAppointments = state.appointments
     .filter((appointment) => `${appointment.date} ${appointment.time}` >= `${isoDate(0)} 00:00`)
@@ -284,7 +425,7 @@ function renderDashboard() {
       ${statCard("Citas hoy", todayAppointments.length, "Agenda preparada para recepcion")}
       ${statCard("Chats activos", openThreads.length, "WhatsApp, bot y asesores")}
       ${statCard("Stock bajo", lowStock.length, "Productos que requieren compra")}
-      ${statCard("Ventas", money(sales), "Pedidos registrados")}
+      ${statCard("Revision humana", humanReview.length, "Casos que no debe contestar sola la IA")}
     </div>
 
     <div class="grid two-col" style="margin-top:16px">
@@ -397,7 +538,7 @@ function renderInbox() {
                     <strong>${itemPatient.name}</strong>
                     <span>${last.text}</span>
                   </span>
-                  ${thread.unread ? `<span class="tag amber">${thread.unread}</span>` : `<span class="tag">${thread.status}</span>`}
+                  ${thread.unread ? `<span class="tag amber">${thread.unread}</span>` : riskTag(thread.risk || "Bajo")}
                 </button>`;
               })
               .join("") || empty("No hay conversaciones con ese filtro.")
@@ -412,7 +553,7 @@ function renderInbox() {
               <h2>${patient?.name || "Sin conversacion"}</h2>
               <p class="muted">${patient?.phone || ""} · ${activeThread?.intent || ""}</p>
             </div>
-            ${activeThread ? `<span class="tag blue">${activeThread.status}</span>` : ""}
+            ${activeThread ? `${riskTag(activeThread.risk || "Bajo")}<span class="tag blue">${activeThread.mode || "IA sugiere"}</span>` : ""}
           </div>
         </div>
         <div class="chat-window" id="chatWindow">
@@ -435,8 +576,10 @@ function renderInbox() {
             <button class="primary" type="submit" ${activeThread ? "" : "disabled"}>Enviar</button>
           </form>
           <div class="quick-replies">
+            <button class="compact" data-action="draft-ai-reply">Sugerir IA</button>
+            <button class="compact" data-action="approve-ai-reply">Aprobar IA</button>
+            <button class="compact" data-action="handoff-human">Humano</button>
             <button class="compact" data-action="verify-appointment">Verificar cita</button>
-            <button class="compact" data-action="send-prep">Indicaciones</button>
             <button class="compact" data-action="offer-slots">Horarios</button>
             <button class="compact" data-action="close-thread">Cerrar</button>
           </div>
@@ -457,6 +600,15 @@ function renderInbox() {
                 <strong>${patient.name}</strong>
                 <div class="meta-row"><span>${patient.age} anos</span><span>${patient.condition}</span></div>
                 <p class="muted">${patient.notes}</p>
+              </article>
+              <article class="list-item">
+                <div class="list-top"><strong>Supervision IA</strong>${riskTag(activeThread?.risk || "Bajo")}</div>
+                <div class="meta-row"><span>${activeThread?.mode || "IA sugiere"}</span><span>${activeThread?.status || "Abierto"}</span></div>
+                <p class="muted">${escapeHtml(activeThread?.suggestedReply || buildSuggestedReply(activeThread))}</p>
+                <div class="meta-row">
+                  <button class="compact" data-action="draft-ai-reply">Actualizar</button>
+                  <button class="primary" data-action="approve-ai-reply">Enviar sugerencia</button>
+                </div>
               </article>
               <article class="list-item">
                 <strong>Citas</strong>
@@ -644,6 +796,64 @@ function renderStore() {
   `;
 }
 
+function renderSettings() {
+  const doctors = state.doctors.filter((doctor) =>
+    matchesSearch(`${doctor.name} ${doctor.specialty} ${doctor.phone} ${doctor.room}`),
+  );
+
+  qs("#settingsView").innerHTML = `
+    <div class="grid two-col">
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Medicos registrados</h2>
+            <p>Administra el equipo disponible para la agenda.</p>
+          </div>
+        </div>
+        <div class="list">
+          ${
+            doctors
+              .map(
+                (doctor) => `<article class="list-item">
+                  <div class="list-top">
+                    <strong>${escapeHtml(doctor.name)}</strong>
+                    <span class="tag ${doctor.active ? "" : "red"}">${doctor.active ? "Activo" : "Inactivo"}</span>
+                  </div>
+                  <div class="meta-row">
+                    <span>${escapeHtml(doctor.specialty)}</span>
+                    <span>${escapeHtml(doctor.phone || "Sin telefono")}</span>
+                    <span>${escapeHtml(doctor.room || "Sin consultorio")}</span>
+                  </div>
+                  <div class="meta-row">
+                    <button class="compact" data-action="toggle-doctor" data-id="${doctor.id}">${doctor.active ? "Desactivar" : "Activar"}</button>
+                    <button class="danger" data-action="delete-doctor" data-id="${doctor.id}">Eliminar</button>
+                  </div>
+                </article>`,
+              )
+              .join("") || empty("No hay medicos con ese filtro.")
+          }
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Agregar medico</h2>
+            <p>Los medicos activos aparecen al crear citas.</p>
+          </div>
+        </div>
+        <form class="form-grid" id="doctorForm">
+          <label class="full">Nombre<input name="name" required placeholder="Dra. Nombre Apellido"></label>
+          <label>Especialidad<input name="specialty" required placeholder="Medicina general"></label>
+          <label>Telefono<input name="phone" placeholder="+52 ..."></label>
+          <label class="full">Consultorio<input name="room" placeholder="Consultorio 1"></label>
+          <button class="primary full" type="submit">Guardar medico</button>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
 function renderAutomation() {
   const flows = [
     {
@@ -692,9 +902,11 @@ function renderAutomation() {
         </div>
       </div>
       <div class="grid three-col">
-        <article class="list-item"><strong>Agenda</strong><p class="muted">Nunca confirma si la cita esta marcada como reprogramar. Pide autorizacion humana.</p></article>
-        <article class="list-item"><strong>Privacidad</strong><p class="muted">Evita diagnosticos en automatico. Solo comparte datos administrativos.</p></article>
-        <article class="list-item"><strong>Tienda</strong><p class="muted">Reserva stock cuando se registra pedido y avisa si quedan pocas piezas.</p></article>
+        ${state.safetyRules
+          .map(
+            (rule) => `<article class="list-item"><div class="list-top"><strong>${rule.name}</strong>${riskTag(rule.level)}</div><p class="muted">${rule.examples}</p></article>`,
+          )
+          .join("")}
       </div>
     </section>
   `;
@@ -718,18 +930,16 @@ function botVerifyAppointment(thread = activeThread()) {
   const text = next
     ? `Tu proxima cita es ${timeLabel(next.date, next.time)} con ${next.doctor}. Estado: ${next.status}. ${next.notes || ""}`
     : "No encuentro una cita activa. Te paso con recepcion para ayudarte a agendar.";
-  addMessage(thread.id, "bot", text);
   thread.intent = "Verificar cita";
+  thread.suggestedReply = text;
+  setThreadSafety(thread, next?.status === "Reprogramar" ? "Medio" : "Bajo", next?.status === "Reprogramar" ? "IA sugiere" : "IA responde sola");
 }
 
 function botOfferSlots(thread = activeThread()) {
   if (!thread) return;
-  addMessage(
-    thread.id,
-    "bot",
-    `Tengo espacios disponibles ${isoDate(1)} a las 09:00, ${isoDate(2)} a las 12:30 y ${isoDate(3)} a las 17:30. Cual prefieres?`,
-  );
   thread.intent = "Agendar";
+  setThreadSafety(thread, "Bajo", "IA sugiere");
+  thread.suggestedReply = `Tengo espacios disponibles ${isoDate(1)} a las 09:00, ${isoDate(2)} a las 12:30 y ${isoDate(3)} a las 17:30. Cual prefiere?`;
 }
 
 function openAppointment(patientId) {
@@ -739,6 +949,11 @@ function openAppointment(patientId) {
   form.elements.date.value = isoDate(1);
   form.elements.time.value = "10:00";
   if (patientId) form.elements.patientId.value = patientId;
+  if (!activeDoctors().length) {
+    state.activeView = "settings";
+    render();
+    return;
+  }
   dialog.showModal();
 }
 
@@ -769,9 +984,34 @@ document.addEventListener("click", (event) => {
     state.activeView = "inbox";
     render();
   }
+  if (action === "draft-ai-reply") {
+    const thread = activeThread();
+    if (thread) {
+      thread.suggestedReply = buildSuggestedReply(thread);
+      const isHighRisk = thread.suggestedReply.includes("urgencias") || thread.suggestedReply.includes("emergencias");
+      setThreadSafety(thread, isHighRisk ? "Alto" : thread.risk || "Bajo", isHighRisk ? "Humano requerido" : thread.mode || "IA sugiere", isHighRisk ? "Derivar humano" : thread.status);
+    }
+    render();
+  }
+  if (action === "approve-ai-reply") {
+    const thread = activeThread();
+    if (thread && thread.suggestedReply) {
+      addMessage(thread.id, thread.mode === "Humano requerido" ? "agent" : "bot", thread.suggestedReply);
+      thread.status = thread.mode === "Humano requerido" ? "Derivar humano" : "Bot activo";
+    }
+    render();
+  }
+  if (action === "handoff-human") {
+    const thread = activeThread();
+    if (thread) setThreadSafety(thread, "Alto", "Humano requerido", "Derivar humano");
+    render();
+  }
   if (action === "send-prep") {
     const thread = activeThread();
-    if (thread) addMessage(thread.id, "bot", "Indicaciones: llega 10 minutos antes, trae identificacion y estudios recientes si los tienes.");
+    if (thread) {
+      thread.suggestedReply = "Indicaciones: llega 10 minutos antes, trae identificacion y estudios recientes si los tiene.";
+      setThreadSafety(thread, "Medio", "IA sugiere");
+    }
     render();
   }
   if (action === "offer-slots") {
@@ -797,7 +1037,7 @@ document.addEventListener("click", (event) => {
   if (action === "message-patient") {
     let thread = state.threads.find((item) => item.patientId === patientId);
     if (!thread) {
-      thread = { id: uid("t"), patientId, status: "Abierto", intent: "Atencion", unread: 0, messages: [] };
+      thread = { id: uid("t"), patientId, status: "Abierto", intent: "Atencion", risk: "Bajo", mode: "IA sugiere", suggestedReply: "Buen dia. Con gusto le apoyo desde recepcion.", unread: 0, messages: [] };
       state.threads.unshift(thread);
     }
     state.activeThreadId = thread.id;
@@ -813,6 +1053,18 @@ document.addEventListener("click", (event) => {
   if (action === "remove-cart") {
     state.cart = state.cart.filter((item) => item.productId !== id);
     render();
+  }
+  if (action === "toggle-doctor") {
+    const doctor = state.doctors.find((item) => item.id === id);
+    if (doctor) doctor.active = !doctor.active;
+    render();
+  }
+  if (action === "delete-doctor") {
+    const doctor = state.doctors.find((item) => item.id === id);
+    if (doctor && window.confirm(`Eliminar a ${doctor.name} de la lista de medicos?`)) {
+      state.doctors = state.doctors.filter((item) => item.id !== id);
+      render();
+    }
   }
   if (action === "complete-order") completeOrder();
   if (action === "store-demo") {
@@ -831,6 +1083,21 @@ document.addEventListener("submit", (event) => {
       event.target.reset();
       render();
     }
+  }
+
+  if (event.target.id === "doctorForm") {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target));
+    state.doctors.unshift({
+      id: uid("d"),
+      name: data.name.trim(),
+      specialty: data.specialty.trim(),
+      phone: data.phone.trim(),
+      room: data.room.trim(),
+      active: true,
+    });
+    event.target.reset();
+    render();
   }
 
   if (event.target.id === "patientForm") {
@@ -852,6 +1119,9 @@ document.addEventListener("submit", (event) => {
       patientId: patient.id,
       status: "Lead",
       intent: "Nuevo paciente",
+      risk: "Bajo",
+      mode: "IA sugiere",
+      suggestedReply: "Buen dia. Ya tenemos su canal registrado. Con gusto le ayudamos a agendar o resolver dudas administrativas.",
       unread: 0,
       messages: [{ from: "bot", text: "Canal creado para seguimiento inicial.", time: "Ahora" }],
     });
@@ -897,7 +1167,7 @@ function completeOrder() {
   state.orders.unshift({ id: uid("o"), patientId, total, date: isoDate(0), status: "Registrado" });
   let thread = state.threads.find((item) => item.patientId === patientId);
   if (!thread) {
-    thread = { id: uid("t"), patientId, status: "Abierto", intent: "Pedido tienda", unread: 0, messages: [] };
+    thread = { id: uid("t"), patientId, status: "Abierto", intent: "Pedido tienda", risk: "Bajo", mode: "IA responde sola", suggestedReply: "Pedido registrado. Podemos coordinar entrega o pickup.", unread: 0, messages: [] };
     state.threads.unshift(thread);
   }
   addMessage(thread.id, "bot", `Pedido registrado: ${lines.join(", ")}. Total ${money(total)}. Podemos coordinar entrega o pickup.`);
